@@ -1,32 +1,39 @@
+// App.jsx
 import { useEffect, useRef, useState } from "react";
 import { Routes, Route, Link } from "react-router-dom";
-import Booking from "./booking";
-import ConfirmBooking from "./confirmBooking"
-import ConfirmSuccess from "./confirmSuccess";
-import Drinks from "./drinks";
 
+import Booking from "./pages/booking";
+import ConfirmBooking from "./pages/confirmBooking";
+import Drinks from "./pages/drinks";              // <- แก้เป็น D ใหญ่
+import ConfirmDrinks from "./pages/ConfirmDrinks";
+import Snacks from "./pages/Snacks";
+import ConfirmSnacks from "./pages/ConfirmSnacks";
+import Foods from "./pages/Foods";
+import ConfirmFoods from "./pages/ConfirmFoods";
 
 import "./App.css";
 
-
+// ✅ หมวดหมู่
 const CATEGORIES = [
-  { name: "อาหาร", icon: "🍜" },
-  { name: "ของทานเล่น", icon: "🍤" },
-  { name: "เครื่องดื่ม", icon: "🥤" },
-  { name: "จองโต๊ะ", icon: "📲" },  // <- อันนี้จะลิงก์ไป /booking
+  { name: "อาหาร",       icon: "🍜", to: "/foods" },
+  { name: "ของทานเล่น", icon: "🍤", to: "/snacks" },
+  { name: "เครื่องดื่ม", icon: "🥤", to: "/drinks?table=A1" }, // ใส่โต๊ะเริ่มต้น
+  { name: "จองโต๊ะ",     icon: "📲", to: "/booking" },
 ];
 
+// ✅ สไลด์โปรโมต
 const HEROES = [
   { img: "/images/p1.png", title: "หอมกระทะ กลมกล่อมทุกคำ!\nผัดซีอิ๊วสูตรเด็ด เส้นใหญ่เหนียวนุ่ม", price: "50 บาท", alt: "ผัดซีอิ๊วสูตรเด็ด" },
   { img: "/images/a1.png", title: "โอริโอ้ลาเต้เย็น \nโอริโอ้เข้ม ลาเต้หอม เย็นสดชื่น", price: "50 บาท", alt: "โอริโอ้ลาเต้เย็น" },
   { img: "/images/a2.png", title: "เกี๊ยวซ่าหมู\nกรอบนอก นุ่มใน ไส้หมูชุ่มฉ่ำ", price: "50 บาท", alt: "เกี๊ยวซ่าหมู" },
 ];
 
+// ✅ รายการโปรโมชั่น (โชว์อย่างเดียว)
 const PROMOS = [
-  { id: 1, name: "ข้าวคลุกน้ำพริกปลาทู", price: "50 บาท", img: "/images/p5.png" },
-  { id: 2, name: "ข้าวปลาแกะ",            price: "50 บาท", img: "/images/p4.png" },
-  { id: 3, name: "ข้าวกุ้งผัดพริกขี้หนูสวน", price: "50 บาท", img: "/images/p3.png" },
-  { id: 4, name: "หมี่ไก่ฉีก",             price: "50 บาท", img: "/images/p2.png" },
+  { id: 1, name: "ข้าวคลุกน้ำพริกปลาทู",        price: "50 บาท", img: "/images/p5.png" },
+  { id: 2, name: "ข้าวปลาแกะ",                   price: "50 บาท", img: "/images/p4.png" },
+  { id: 3, name: "ข้าวกุ้งผัดพริกขี้หนูสวน",     price: "50 บาท", img: "/images/p3.png" },
+  { id: 4, name: "หมี่ไก่ฉีก",                    price: "50 บาท", img: "/images/p2.png" },
 ];
 
 function Home() {
@@ -66,7 +73,7 @@ function Home() {
 
   return (
     <div className="page">
-      {/* HERO (Carousel) */}
+      {/* HERO */}
       <section
         className="hero"
         onMouseEnter={stopAuto}
@@ -83,9 +90,7 @@ function Home() {
         <div className="hero__text">
           <p className="hero__title">
             {slide.title.split("\n").map((t, i, a) => (
-              <span key={i}>
-                {t}{i < a.length - 1 && <br />}
-              </span>
+              <span key={i}>{t}{i < a.length - 1 && <br />}</span>
             ))}
           </p>
           <p className="hero__price">เพียง <strong>{slide.price}</strong></p>
@@ -109,36 +114,26 @@ function Home() {
         ))}
       </div>
 
-      {/* CATEGORIES (ลิงก์ “จองโต๊ะ”) */}
-      {/* CATEGORIES (ให้ “เครื่องดื่ม” กับ “จองโต๊ะ” เป็นลิงก์) */}
-<section className="cats">
-  {CATEGORIES.map((c) => {
-    const to =
-      c.name === "จองโต๊ะ" ? "/booking" :
-      c.name === "เครื่องดื่ม" ? "/drinks" :
-      null;
+      {/* CATEGORIES */}
+      <section className="cats">
+        {CATEGORIES.map((c) => (
+          <Link key={c.name} to={c.to} className="cat">
+            <span className="cat__icon" aria-hidden>{c.icon}</span>
+            <span className="cat__label">{c.name}</span>
+          </Link>
+        ))}
+      </section>
 
-    return to ? (
-      <Link key={c.name} to={to} className="cat">
-        <span className="cat__icon" aria-hidden>{c.icon}</span>
-        <span className="cat__label">{c.name}</span>
-      </Link>
-    ) : (
-      <button key={c.name} className="cat" type="button">
-        <span className="cat__icon" aria-hidden>{c.icon}</span>
-        <span className="cat__label">{c.name}</span>
-      </button>
-    );
-  })}
-</section>
-
-
-      {/* PROMOTIONS */}
+      {/* PROMOTIONS (ไม่กดได้) */}
       <section className="section">
-        <h2 className="section__title">โปรโมชั่น</h2>
+        <h2 className="section__title">เมนูแนะนำ</h2>
         <div className="grid">
           {PROMOS.map((p) => (
-            <article key={p.id} className="card">
+            <div
+              key={p.id}
+              className="card"
+              style={{ textAlign: "left", cursor: "default" }}
+            >
               <div className="card__imgWrap">
                 <div className="card__halo" />
                 <img src={p.img} alt={p.name} />
@@ -147,7 +142,7 @@ function Home() {
                 <h3 className="card__name">{p.name}</h3>
                 <span className="badge">{p.price}</span>
               </div>
-            </article>
+            </div>
           ))}
         </div>
       </section>
@@ -159,11 +154,18 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Home />} />
+
       <Route path="/booking" element={<Booking />} />
       <Route path="/confirm" element={<ConfirmBooking />} />
-      <Route path="/success" element={<ConfirmSuccess />} /> {/* ✅ */}
-      <Route path="/drinks" element={<Drinks />} />
 
+      <Route path="/drinks" element={<Drinks />} />
+      <Route path="/drinks/confirm" element={<ConfirmDrinks />} />
+
+      <Route path="/snacks" element={<Snacks />} />
+      <Route path="/snacks/confirm" element={<ConfirmSnacks />} />
+
+      <Route path="/foods" element={<Foods />} />
+      <Route path="/foods/confirm" element={<ConfirmFoods />} />
     </Routes>
   );
 }

@@ -1,0 +1,131 @@
+.booking-full {
+  min-height: 100vh;                /* สูงเต็มหน้าจอ */
+  display: flex;
+  flex-direction: column;
+  background: #f3f4f6;              /* พื้นหลังเทาอ่อนเต็มหน้า */
+  padding: 0;
+}
+
+/* แถบหัวเรื่อง */
+/* แถบหัวเรื่อง */
+.bk-titlebar {
+  position: relative;
+  width: 100%;
+  height: 56px;                  /* กำหนดความสูงคงที่ */
+  background:#8b98ad;
+  color:#fff;
+  display:flex;
+  align-items:center;            /* จัดเนื้อหาในแนวตั้งให้อยู่กลาง */
+  justify-content:center;        /* เนื้อหาหลัก (h1) อยู่กลางแนวนอน */
+ 
+}
+.bk-titlebar h1 {
+  margin:0;
+  font-size:22px;
+  font-weight:700;
+  line-height:1;
+}
+.bk-back {
+  position: absolute;
+  left: 16px;
+  top: 50%;                      /* จัดให้อยู่กึ่งกลางแนวตั้ง */
+  transform: translateY(-50%);   /* ดึงลงให้ตรงกลาง */
+  border:0;
+  background:transparent;
+  color:#fff;
+  font-size:26px;
+  cursor:pointer;
+  line-height:1;
+}
+
+/* โซนชิดซ้าย */
+.bk-zones {
+  display:flex;
+  gap:12px;
+  justify-content:flex-start;       /* ⬅ ชิดซ้าย */
+  padding:12px 24px;                /* ขยายพื้นที่แนวนอนนิดหน่อย */
+  background:#fff;
+}
+.bk-zone {
+  border:0;
+  cursor:pointer;
+  padding:10px 18px;
+  border-radius:999px;
+  background:#dbe7e1;
+  font-weight:600;
+}
+.bk-zone.active { background:#c8d9d1; box-shadow:inset 0 0 0 2px #9fbfb1; }
+
+/* ป้ายเวที/ประตู */
+.bk-legend {
+  margin:12px auto;
+  background:#a9b8cc;
+  color:#fff;
+  padding:8px 18px;
+  border-radius:10px;
+  font-weight:700;
+}
+.bk-legend.top { margin-top:18px; }
+.bk-legend.bottom { margin-bottom:18px; }
+
+/* ผังโต๊ะ — ขยายให้ใหญ่ขึ้นทั้งขนาดและพื้นที่รอบนอก */
+.bk-map {
+  flex: 1;                          /* กินพื้นที่ว่างทั้งหมด */
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 18px;                        /* ระยะห่างโต๊ะมากขึ้น */
+  padding: 40px;                    /* ขยาย padding ให้ดูโปร่ง */
+  max-width: 100%;
+  min-height: 60vh;                 /* อย่างน้อย 60% สูงของจอ */
+}
+
+/* โต๊ะใหญ่ขึ้นอ่านง่ายขึ้น */
+.seat {
+  background:#e5e7eb;
+  border:0;
+  border-radius:10px;
+  font-weight:700;
+  cursor:pointer;
+  padding: 24px 0;                  /* ความสูงโต๊ะมากขึ้น */
+  font-size: 16px;                  /* ตัวหนังสือใหญ่ขึ้น */
+  transition: transform .06s ease, box-shadow .2s ease, background .2s ease;
+}
+.seat:hover { transform: translateY(-1px); box-shadow: 0 8px 14px rgba(0,0,0,.08); }
+.seat--reserved { background:#ef4444; color:#fff; cursor:not-allowed; box-shadow:none; }
+.seat--selected { background:#5d7ea1; color:#fff; }
+
+/* ป้ายด้านข้าง */
+.bk-side-label {
+  text-align:right;
+  padding:6px 24px;
+  font-weight:700;
+  color:#374151;
+}
+
+/* แถบสรุป+ยืนยัน */
+.bk-actions {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:18px 24px;
+  background:#fff;
+}
+.bk-summary { font-weight:600; }
+.bk-submit {
+  border:0;
+  background:#5d7ea1;
+  color:#fff;
+  padding:10px 22px;
+  border-radius:10px;
+  cursor:pointer;
+}
+.bk-submit:disabled { opacity:.6; cursor:not-allowed; }
+
+/* Responsive: ปรับจำนวนคอลัมน์ให้ใหญ่ขึ้นแบบเต็มหน้าจอมือถือด้วย */
+@media (max-width: 900px) {
+  .bk-map { grid-template-columns: repeat(4, 1fr); padding: 28px; gap: 16px; }
+}
+@media (max-width: 600px) {
+  .bk-map { grid-template-columns: repeat(3, 1fr); padding: 20px; gap: 14px; }
+  .seat { padding: 20px 0; font-size: 15px; }
+}
