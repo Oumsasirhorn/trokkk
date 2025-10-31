@@ -2,17 +2,36 @@
 "use strict";
 const express = require("express");
 const cors = require("cors");
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 
 const app = express();
-app.use(cors({ origin: ["http://localhost:5173"], credentials: true }));
+
+// ===== CORS: allow หลาย origin จาก .env =====
+const ALLOWED = (process.env.CORS_ORIGINS || "http://localhost:5173")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, cb) {
+    // อนุญาตเครื่องมือ/API clients ที่ไม่มี Origin ด้วย
+    if (!origin || ALLOWED.includes(origin)) return cb(null, true);
+    cb(new Error(`CORS blocked for origin: ${origin}`));
+  },
+  credentials: true,
+}));
+
 app.use(express.json());
 
-// รวมทุก routes
+// Routes
 const routes = require("./routes/index");
-app.use("/", routes);  // ถ้าอยากใช้ prefix `/api` เปลี่ยนเป็น app.use("/api", routes);
+app.use("/", routes);
 
 app.get("/", (_req, res) => res.send("Restaurant API is running 🚀"));
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`✅ Server running on http://localhost:${PORT}`));
+const PORT = Number(process.env.PORT || 5000);
+app.listen(PORT, () => {
+  console.log(`✅ Server running on :${PORT}`);
+  console.log(`   Allowed origins: ${ALLOWED.join(", ")}`);
+});
