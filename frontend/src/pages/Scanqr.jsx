@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import QrReader from "react-qr-reader";
 
-const API_BASE = "https://trokkk.onrender.com";
+const API_BASE = "http://localhost:5000";
 
 export default function OrderPage() {
   const [table, setTable] = useState(null);

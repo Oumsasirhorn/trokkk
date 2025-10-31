@@ -9,7 +9,7 @@ const selectedKey = (table) => `fd_cart_${table || "unknown"}_selected`;    // à
 const ORDER_NOTE_KEY = (table) => cartKey(`${table}_order_note`);
 
 const PLACEHOLDER = "/images/foods/placeholder.jpg";
-const API_BASE = import.meta.env.VITE_API_BASE || "https://trokkk.onrender.com";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
 
 function toNum(v) {
   const n = Number(v);
