@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useState, useMemo, useEffect } from "react";
 import "./Foods.css";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const API_BASE = import.meta.env.VITE_API_BASE || "https://trokkk.onrender.com";
 const PLACEHOLDER = "/images/snacks/placeholder.jpg";
 const cartKey = (table) => `sn_cart_${table || "unknown"}`;
 

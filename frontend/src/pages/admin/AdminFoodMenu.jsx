@@ -5,7 +5,7 @@ import { useAuth } from "../../auth/AuthContext";
 import "./admin.css";
 
 /* ====== FIX: กัน VITE_API_BASE เขียนพลาดมี , หรือ / ท้าย ====== */
-const RAW_API  = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const RAW_API  = import.meta.env.VITE_API_BASE || "https://trokkk.onrender.com";
 const API_BASE = RAW_API.replace(/[,\s]+$/, "").replace(/\/+$/, "");
 
 /* ====== Resources ====== */
