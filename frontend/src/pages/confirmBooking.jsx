@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
-import "./ConfirmBooking.css";
+import "./confirmBooking.css";
 
 /* ===== Config ===== */
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
