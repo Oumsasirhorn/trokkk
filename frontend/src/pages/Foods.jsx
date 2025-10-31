@@ -1,25 +1,31 @@
 // src/pages/Foods.jsx
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import "./Foods.css"; // ใช้สไตล์เดิมได้เลย
+import "./Foods.css";
 
-// อ่านฐาน URL ของ API จาก .env (Vite)
+/* ========== Config & Utils ========== */
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
-// endpoint หลังบ้านที่ใช้จริง
 const FOODS_API = `${API_BASE}/main_dishes`;
-
 const cartKey = (table) => `fd_cart_${table || "unknown"}`;
+
+function norm(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 export default function Foods() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
-  const tableLabel = sp.get("table") || "";
 
+  // ✅ โต๊ะอ่านจาก query เท่านั้น (ถ้ายังไม่สแกนให้ว่างได้)
+  const tableLabel = sp.get("table")?.trim() || "";
+
+  // ====== โหลดรายการอาหาร ======
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [items, setItems] = useState([]);
 
-  // โหลดจาก backend + merge กับของใน sessionStorage
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -27,214 +33,195 @@ export default function Foods() {
         setError(null);
         setLoading(true);
 
-        // ✅ เรียกหลังบ้านจริง
-        const res = await fetch(`${FOODS_API}?limit=200`, {
-          headers: { Accept: "application/json" },
-        });
+        const res = await fetch(`${FOODS_API}?limit=200`, { headers: { Accept: "application/json" } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        console.log("👉 API foods:", data);
-
-        // รองรับทั้ง {items:[...]} หรือ array ตรง ๆ
         const payload = Array.isArray(data) ? data : data.items || [];
 
-        // สร้าง base list (map ฟิลด์ให้เข้ารูปแบบที่หน้า UI ใช้)
         const base = payload.map((d) => {
-          const id = d.id ?? d.item_id;
-          const img =
-            d.img || d.image || d.image_url || "/images/foods/placeholder.jpg";
+          const idRaw = d.id ?? d.item_id ?? d.main_id ?? d.menu_id;
+          const id = (idRaw !== null && idRaw !== undefined && idRaw !== "")
+            ? String(idRaw)
+            : `name:${d.name}`;
 
-          // ถ้ามี base_prices (ธรรมดา/พิเศษ/เล็ก/กลาง/ใหญ่) ให้เลือกตัว default
-          const bp = d.base_prices || {};
-          const sizeOrder = ["พิเศษ", "ธรรมดา", "ใหญ่", "กลาง", "เล็ก"];
-          const defaultPortion =
-            sizeOrder.find((k) => bp[k] != null) || Object.keys(bp)[0] || null;
-
-          const basePriceFromBP =
-            defaultPortion && bp[defaultPortion] != null
-              ? Number(bp[defaultPortion])
-              : null;
-
-          // fallback ถ้าไม่มี base_prices → ใช้ d.price หรือ d.default_price
           const basePrice =
-            basePriceFromBP ?? Number(d.price ?? d.default_price ?? 0);
+            norm(d.price) ??
+            norm(d.default_price) ??
+            norm(d.food_price) ??
+            0;
+          const price = Number(basePrice) + Number(norm(d.extra_price) ?? 0);
 
-          const extra = Number(d.extra_price ?? 0);
+          const img = d.image ? `data:image/png;base64,${d.image}` : "/images/foods/placeholder.jpg";
 
           return {
             id,
             name: d.name,
-            price: basePrice + extra,
+            price,
             img,
-            base_prices: bp,
-            extra_price: extra,
-            default_portion: defaultPortion,
-            toppings: d.toppings || d.extras || [],
-            default_spicy: d.spicy ?? "ปกติ",
             qty: 0,
+            itemNote: "",
           };
         });
 
-        // merge qty จาก session
+        // ✅ merge cart ต่อโต๊ะ
         const saved = sessionStorage.getItem(cartKey(tableLabel));
         if (saved) {
-          const savedArr = JSON.parse(saved);
-          const byId = Object.fromEntries(savedArr.map((x) => [x.id, x]));
+          const parsed = JSON.parse(saved || "[]");
+          const byId = Object.fromEntries((Array.isArray(parsed) ? parsed : []).map((x) => [String(x.id), x]));
           for (const it of base) {
-            it.qty = Math.max(0, byId[it.id]?.qty ?? 0);
+            const prev = byId[it.id];
+            if (!prev) continue;
+            it.qty = Math.max(0, prev.qty ?? 0);
+            if (typeof prev.itemNote === "string") it.itemNote = prev.itemNote;
           }
         }
 
         if (alive) setItems(base);
       } catch (e) {
-        console.error(e);
         if (alive) setError(e.message || "โหลดข้อมูลล้มเหลว");
       } finally {
         if (alive) setLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [tableLabel]);
 
-  // เขียนกลับ sessionStorage เมื่อ items เปลี่ยน
+  // ====== Persist cart ======
   useEffect(() => {
     try {
       sessionStorage.setItem(cartKey(tableLabel), JSON.stringify(items));
     } catch {}
   }, [items, tableLabel]);
 
+  // ====== บวก/ลบจำนวน ======
   const dec = (id) =>
-    setItems((list) =>
-      list.map((it) =>
-        it.id === id ? { ...it, qty: Math.max(0, it.qty - 1) } : it
-      )
-    );
-
+    setItems((list) => list.map((it) => (it.id === id ? { ...it, qty: Math.max(0, it.qty - 1) } : it)));
   const inc = (id) =>
-    setItems((list) =>
-      list.map((it) => (it.id === id ? { ...it, qty: it.qty + 1 } : it))
-    );
+    setItems((list) => list.map((it) => (it.id === id ? { ...it, qty: it.qty + 1 } : it)));
 
-  const cartCount = useMemo(
-    () => items.reduce((sum, it) => sum + it.qty, 0),
+  const cartCount = useMemo(() => items.reduce((sum, it) => sum + (it.qty || 0), 0), [items]);
+  const cartTotal = useMemo(
+    () => items.reduce((sum, it) => sum + (Number(it.price || 0) * (it.qty || 0)), 0),
     [items]
   );
 
-  // ไปหน้า confirm ของอาหาร (ใช้ query param พกหมายเลขโต๊ะ)
-  const goCart = () => {
-    navigate(`/foods/confirm?table=${encodeURIComponent(tableLabel)}`);
+  // ====== ไปหน้า Confirm (ไม่บังคับมีโต๊ะ) ======
+  const goConfirm = () => {
+    const selected = items.filter((it) => (it.qty || 0) > 0);
+    if (!selected.length) {
+      alert("ยังไม่ได้เลือกรายการอาหาร");
+      return;
+    }
+
+    const keySel = `${cartKey(tableLabel)}_selected`;
+    try {
+      sessionStorage.setItem(
+        keySel,
+        JSON.stringify(
+          selected.map((x) => ({
+            ...x,
+            food_id: String(x.id),
+            price: Number(x.price),
+          }))
+        )
+      );
+      sessionStorage.setItem(cartKey(tableLabel), JSON.stringify(items));
+    } catch {}
+
+    navigate(`/foods/confirm?table=${encodeURIComponent(tableLabel)}`, {
+      state: {
+        items: selected.map((x) => ({
+          ...x,
+          food_id: String(x.id),
+          price: Number(x.price),
+        })),
+      },
+    });
   };
 
-  if (loading) {
-    return (
-      <div className="dr-page">
-        <header className="dr-topbar">
-          <button
-            className="dr-back"
-            onClick={() => navigate("/")}
-            aria-label="ย้อนกลับ"
-          >
-            ‹
-          </button>
-          <div className="dr-title">
-            หมายเลขโต๊ะ: <strong>{tableLabel}</strong>
-          </div>
-          <button className="dr-cart" onClick={goCart} aria-label="ไปตะกร้า">
-            <span className="dr-cartIcon">🧺</span>
-            <span className="dr-badge">{cartCount}</span>
-          </button>
-        </header>
-
-        <main className="dr-container">
-          <p>กำลังโหลดรายการอาหาร…</p>
-        </main>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="dr-page">
-        <header className="dr-topbar">
-          <button
-            className="dr-back"
-            onClick={() => navigate("/")}
-            aria-label="ย้อนกลับ"
-          >
-            ‹
-          </button>
-          <div className="dr-title">
-            หมายเลขโต๊ะ: <strong>{tableLabel}</strong>
-          </div>
-        </header>
-        <main className="dr-container">
-          <p style={{ color: "crimson" }}>❌ โหลดข้อมูลล้มเหลว: {error}</p>
-          <p style={{ fontSize: 12, opacity: 0.8 }}>
-            ตรวจสอบ VITE_API_BASE ที่ .env และสถานะเซิร์ฟเวอร์ {API_BASE}
-          </p>
-        </main>
-      </div>
-    );
-  }
-
+  // ====== UI ======
   return (
-    <div className="dr-page">
-      <header className="dr-topbar">
-        <button
-          className="dr-back"
-          onClick={() => navigate("/")}
-          aria-label="ย้อนกลับ"
-        >
-          ‹
-        </button>
-        <div className="dr-title">
-          หมายเลขโต๊ะ: <strong>{tableLabel}</strong>
+    <div className="fd-page">
+      {/* Topbar */}
+      <header className="fd-topbar" role="banner">
+        <button className="fd-back" onClick={() => navigate("/")} aria-label="ย้อนกลับ">‹</button>
+        <div className="fd-title">
+          <span>หมายเลขโต๊ะ</span>
+          <strong>{tableLabel || "—"}</strong>
         </div>
-        <button className="dr-cart" onClick={goCart} aria-label="ไปตะกร้า">
-          <span className="dr-cartIcon">🧺</span>
-          <span className="dr-badge">{cartCount}</span>
+        <button className="fd-cartBtn" onClick={goConfirm} aria-label="ไปยืนยันออเดอร์">
+          <span className="fd-cartIcon" aria-hidden>🧺</span>
+          <span className="fd-badge" aria-live="polite">{cartCount}</span>
         </button>
       </header>
 
-      <main className="dr-container">
-        <h2 className="dr-sectionTitle">- อาหาร -</h2>
+      {/* Content */}
+      <main className="fd-container" role="main">
+        <h2 className="fd-sectionTitle">เมนูอาหาร</h2>
 
-        <ul className="dr-list">
-          {items.map((it) => (
-            <li key={it.id} className="dr-row">
-              <div className="dr-left">
-                <img className="dr-thumb" src={it.img} alt={it.name} />
-              </div>
-              <div className="dr-mid">
-                <h3 className="dr-name">{it.name}</h3>
-                <div className="dr-price">{it.price.toFixed(2)} ฿</div>
-              </div>
-              <div className="dr-right">
-                <button
-                  className="dr-circle"
-                  onClick={() => dec(it.id)}
-                  aria-label={`ลด ${it.name}`}
-                >
-                  –
-                </button>
-                <span className="dr-qty" aria-live="polite">
-                  {it.qty}
-                </span>
-                <button
-                  className="dr-circle"
-                  onClick={() => inc(it.id)}
-                  aria-label={`เพิ่ม ${it.name}`}
-                >
-                  +
-                </button>
-              </div>
-              <hr className="dr-divider" />
-            </li>
-          ))}
-        </ul>
+        {error && (
+          <div className="fd-error" role="alert">❌ โหลดข้อมูลล้มเหลว: {error}</div>
+        )}
+
+        {loading ? (
+          <ul className="fd-grid">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <li key={`sk-${i}`} className="fd-card fd-skeleton">
+                <div className="fd-thumb sk" />
+                <div className="fd-info">
+                  <div className="sk sk-line sk-1" />
+                  <div className="sk sk-line sk-2" />
+                </div>
+                <div className="fd-ctrl">
+                  <div className="sk sk-pill" />
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <ul className="fd-grid">
+            {items.map((it) => (
+              <li key={`fd-${it.id}`} className="fd-card">
+                <div className="fd-thumbWrap">
+                  <img
+                    className="fd-thumb"
+                    src={it.img}
+                    alt={it.name}
+                    loading="lazy"
+                    onError={(e) => {
+                      if (e.currentTarget.src !== "/images/foods/placeholder.jpg") {
+                        e.currentTarget.src = "/images/foods/placeholder.jpg";
+                      }
+                    }}
+                  />
+                </div>
+
+                <div className="fd-info">
+                  <h3 className="fd-name" title={it.name}>{it.name}</h3>
+                  <div className="fd-price">{Number(it.price || 0).toFixed(2)} ฿</div>
+                </div>
+
+                <div className="fd-ctrl" aria-label={`ตัวควบคุมจำนวน ${it.name}`}>
+                  <button className="fd-circle" onClick={() => dec(it.id)} aria-label={`ลด ${it.name}`}>–</button>
+                  <span className="fd-qty" aria-live="polite">{it.qty}</span>
+                  <button className="fd-circle" onClick={() => inc(it.id)} aria-label={`เพิ่ม ${it.name}`}>+</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </main>
+
+      {/* Bottom confirm bar */}
+      <div className={`fd-bottom ${cartCount ? "show" : ""}`} role="region" aria-live="polite">
+        <div className="fd-bottomInfo">
+          <span className="fd-bottomCount">{cartCount} รายการ</span>
+          <span className="fd-bottomTotal">{cartTotal.toFixed(2)} ฿</span>
+        </div>
+        <button className="fd-bottomBtn" onClick={goConfirm}>
+          ยืนยันออเดอร์
+        </button>
+      </div>
     </div>
   );
 }

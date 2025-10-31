@@ -3,300 +3,353 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useState, useMemo, useEffect } from "react";
 import "./Foods.css";
 
-const cartKey = (table) => `fd_cart_${table || "unknown"}`;
+/* ========== Utils & Storage Keys ========== */
+const cartKey = (table) => `fd_cart_${table || "unknown"}`;                 // ตะกร้าทั้งหมด
+const selectedKey = (table) => `fd_cart_${table || "unknown"}_selected`;    // เฉพาะที่เลือก qty>0
+const ORDER_NOTE_KEY = (table) => cartKey(`${table}_order_note`);
 
-const DEFAULTS = {
-  special: "ธรรมดา",      // "ธรรมดา" | "พิเศษ +10"
-  eatWhere: "ทานที่ร้าน", // "เอากลับบ้าน" | "ทานที่ร้าน"
-};
-const SPECIAL_OPTS = ["ธรรมดา", "พิเศษ +10"];
-const EATWHERE_OPTS = ["เอากลับบ้าน", "ทานที่ร้าน"];
-const SPECIAL_ADD = 10;
+const PLACEHOLDER = "/images/foods/placeholder.jpg";
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+
+function toNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function asStr(v, fb = "") {
+  return typeof v === "string" ? v : fb;
+}
+// แสดงเป็นตัวเลขล้วน ไม่มีสัญลักษณ์สกุลเงิน
+function THB(n) {
+  return `${toNum(n).toFixed(2)}`;
+}
+function coerceItem(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id =
+    asStr(raw.id) ||
+    asStr(raw.food_id) ||
+    asStr(raw.item_id) ||
+    asStr(raw.main_id) ||
+    (raw.name ? `name:${asStr(raw.name)}` : "");
+
+  const name = asStr(raw.name, "").trim();
+  const price = toNum(raw.price ?? raw.unit_price ?? raw.food_price);
+  const qty = toNum(raw.qty);
+  const img = asStr(raw.img || raw.image || raw.image_url || PLACEHOLDER, PLACEHOLDER);
+  const itemNote = asStr(raw.itemNote || raw.note, "");
+
+  if (!id || !name || qty <= 0) return null;
+
+  return { id, name, img, price, qty, itemNote };
+}
+function safeParse(jsonStr) {
+  try {
+    if (!jsonStr || typeof jsonStr !== "string") return [];
+    const v = JSON.parse(jsonStr);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 export default function ConfirmFoods() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
-  const table = sp.get("table") || "";
-  const location = useLocation();
-  const { items: itemsFromNav } = location.state || { items: [] };
+  const table = asStr(sp.get("table") || ""); // อาจว่างได้
 
-  // ---------- Persisted cart ----------
+  const location = useLocation();
+  const navItems = Array.isArray(location.state?.items) ? location.state.items : null;
+
+  // ---------- Initial load (priority: nav.state -> selectedKey -> cartKey(filter qty>0)) ----------
   const [items, setItems] = useState(() => {
     try {
-      const saved = sessionStorage.getItem(cartKey(table));
-      const base = saved ? JSON.parse(saved) : Array.isArray(itemsFromNav) ? itemsFromNav : [];
-      return (base || []).map((it) => ({
-        ...it,
-        special: it.special || DEFAULTS.special,
-        eatWhere: it.eatWhere || DEFAULTS.eatWhere,
-        // รองรับหมายเหตุรายเมนู (ถ้าจะใช้ภายหลัง)
-        itemNote: typeof it.itemNote === "string" ? it.itemNote : "",
-      }));
+      if (navItems?.length) return navItems.map(coerceItem).filter(Boolean);
+
+      const selRaw = sessionStorage.getItem(selectedKey(table));
+      const sel = safeParse(selRaw).map(coerceItem).filter(Boolean);
+      if (sel.length) return sel;
+
+      const fullRaw = sessionStorage.getItem(cartKey(table));
+      const full = safeParse(fullRaw)
+        .map((it) => ({ ...it, qty: toNum(it.qty) }))
+        .filter((x) => x.qty > 0)
+        .map(coerceItem)
+        .filter(Boolean);
+
+      return full;
     } catch {
-      const base = Array.isArray(itemsFromNav) ? itemsFromNav : [];
-      return base.map((it) => ({
-        ...it,
-        special: it.special || DEFAULTS.special,
-        eatWhere: it.eatWhere || DEFAULTS.eatWhere,
-        itemNote: typeof it.itemNote === "string" ? it.itemNote : "",
-      }));
+      return [];
     }
   });
 
-  // หมายเหตุรวมทั้งออเดอร์ (ช่อง “รายละเอียด”)
   const [orderNote, setOrderNote] = useState(() => {
     try {
-      const saved = sessionStorage.getItem(cartKey(`${table}_order_note`));
-      return saved || "";
-    } catch { return ""; }
+      return asStr(sessionStorage.getItem(ORDER_NOTE_KEY(table)) || "");
+    } catch {
+      return "";
+    }
   });
 
+  const [paymentMethod, setPaymentMethod] = useState("เงินสด");
+
+  // ---------- Persist on change ----------
   useEffect(() => {
     try {
-      sessionStorage.setItem(cartKey(table), JSON.stringify(items));
-      sessionStorage.setItem(cartKey(`${table}_order_note`), orderNote);
+      const selectedOnly = items.map((x) => ({
+        ...x,
+        food_id: asStr(x.food_id ?? x.id),
+        price: toNum(x.price),
+        qty: toNum(x.qty),
+        itemNote: asStr(x.itemNote, ""),
+      }));
+      sessionStorage.setItem(selectedKey(table), JSON.stringify(selectedOnly));
+
+      const fullRaw = sessionStorage.getItem(cartKey(table));
+      if (fullRaw) {
+        const fullArr = safeParse(fullRaw);
+        const byId = Object.fromEntries(
+          fullArr.map((f) => [asStr(f.id ?? f.food_id ?? ""), f]).filter(([k]) => !!k)
+        );
+        for (const it of items) {
+          const key = asStr(it.id ?? it.food_id);
+          if (key) {
+            byId[key] = {
+              ...(byId[key] || {}),
+              id: key,
+              name: asStr(it.name),
+              img: asStr(it.img || PLACEHOLDER),
+              price: toNum(it.price),
+              qty: toNum(it.qty),
+              itemNote: asStr(it.itemNote, ""),
+            };
+          }
+        }
+        sessionStorage.setItem(cartKey(table), JSON.stringify(Object.values(byId)));
+      }
+
+      sessionStorage.setItem(ORDER_NOTE_KEY(table), asStr(orderNote, ""));
     } catch {}
   }, [items, orderNote, table]);
 
   // ---------- Derived ----------
-  const selected = useMemo(() => items.filter((it) => it.qty > 0), [items]);
-
-  const extraPerPiece = (it) => (it.special === "พิเศษ +10" ? SPECIAL_ADD : 0);
-
-  const lineTotal = (it) => {
-    const price = Number(it.price || 0);
-    return it.qty * (price + extraPerPiece(it));
-  };
-
-  const total = useMemo(
-    () => selected.reduce((sum, it) => sum + lineTotal(it), 0),
-    [selected]
+  const selected = useMemo(
+    () => items.map((x) => ({ ...x, qty: toNum(x.qty), price: toNum(x.price) })).filter((it) => it.qty > 0),
+    [items]
   );
-
-  const THB = (n) => `${Number(n).toFixed(2)} ฿`;
+  const lineTotal = (it) => toNum(it.qty) * toNum(it.price);
+  const total = useMemo(() => selected.reduce((s, it) => s + lineTotal(it), 0), [selected]);
 
   // ---------- UI state ----------
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [askClear, setAskClear] = useState(false);
-  const [askRemoveId, setAskRemoveId] = useState(null);
 
   // ---------- Actions ----------
-  const updateItem = (id, patch) => {
-    setItems((list) => list.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  };
+  const removeOne = (id) => setItems((list) => list.filter((x) => x.id !== id));
+  const clearAll = () => setItems([]);
 
-  const removeOne = (id) => {
-    setAskRemoveId(null);
-    setItems((list) => list.filter((x) => x.id !== id));
-  };
-
-  const clearAll = () => {
-    setAskClear(false);
-    setItems([]);
-  };
-
+  // ---------- POST to backend (item_type = main_dish) ----------
   const handleConfirm = async () => {
     try {
+      if (selected.length === 0) {
+        alert("ยังไม่มีรายการอาหาร");
+        return;
+      }
       setIsSubmitting(true);
-      // TODO: POST ไปหลังบ้าน
-      // await api.post('/orders/foods', {
-      //   table,
-      //   note: orderNote,
-      //   items: selected.map((it) => ({
-      //     id: it.id,
-      //     name: it.name,
-      //     qty: it.qty,
-      //     price: Number(it.price),
-      //     special: it.special,
-      //     eatWhere: it.eatWhere,
-      //     itemNote: it.itemNote || "",
-      //     extraPerPiece: extraPerPiece(it),
-      //     lineTotal: lineTotal(it),
-      //   })),
-      //   total,
-      // });
 
-      alert("ส่งคำสั่งซื้อแล้ว ✅");
-      sessionStorage.removeItem(cartKey(table));
-      sessionStorage.removeItem(cartKey(`${table}_order_note`));
+      const method =
+        paymentMethod === "เงินสด" ? "cash" :
+        paymentMethod === "พร้อมเพย์" ? "promptpay" : "unknown";
+
+      const body = {
+        table_number: null,
+        table_label: table || "unknown",
+        payment_method: method,
+        order_note: orderNote || "",
+        amount: total,
+        items: selected.map((it) => ({
+          item_type: "main_dish",            // <<< fixed
+          ref_id: String(it.id ?? it.food_id ?? ""),
+          name: asStr(it.name, "-"),
+          price: toNum(it.price),
+          qty: toNum(it.qty),
+          itemNote: asStr(it.itemNote, ""),
+        })),
+      };
+
+      const res = await fetch(`${API_BASE}/orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json())?.message || msg; } catch {}
+        throw new Error(msg);
+      }
+      const data = await res.json();
+
+      alert(`ส่งคำสั่งซื้อแล้ว ✅ (ออเดอร์ #${data.order_id})`);
+      sessionStorage.removeItem(selectedKey(table));
+      sessionStorage.removeItem(ORDER_NOTE_KEY(table));
       navigate(`/foods?table=${encodeURIComponent(table)}`);
+    } catch (e) {
+      console.error("ConfirmFoods POST error:", e);
+      alert("มีข้อผิดพลาดระหว่างส่งคำสั่งซื้อ: " + (e.message || e));
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  /* ===================== UI (fd-* + แนวนอนกะทัดรัด) ===================== */
   return (
-    <div className="dr-page dr-page--confirm">
-      {/* Top Bar */}
-      <header className="dr-topbar">
+    <div className="fd-page">
+      {/* Topbar */}
+      <header className="fd-topbar">
         <button
-          className="dr-back"
+          className="fd-back"
           onClick={() => navigate(`/foods?table=${encodeURIComponent(table)}`)}
           aria-label="ย้อนกลับ"
         >
           ‹
         </button>
-        <div className="dr-title">ตรวจสอบรายการอาหาร</div>
-        <span className="dr-topbar-spacer" aria-hidden="true"></span>
+        <div className="fd-title">
+          <span>หมายเลขโต๊ะ</span>
+          <strong>{table || "—"}</strong>
+        </div>
+        <div /> {/* spacer */}
       </header>
 
-      <main className="dr-container dr-container--pb">
-        <h2 className="dr-sectionTitle">
-          ตะกร้าโต๊ะ <strong>{table || "-"}</strong>
-        </h2>
-
+      <main className="fd-container">
         {selected.length === 0 ? (
-          <div className="dr-empty">
-            <p>ยังไม่มีการสั่งอาหาร</p>
-            <button
-              className="dr-ghostBtn"
-              onClick={() => navigate(`/foods?table=${encodeURIComponent(table)}`)}
-            >
-              เลือกอาหาร
-            </button>
+          <div className="fd-card" style={{ padding: "1.1rem 1rem" }}>
+            <p style={{ margin: 0, color: "var(--muted)" }}>ยังไม่มีรายการอาหาร</p>
+            <div style={{ marginTop: ".75rem" }}>
+              <button
+                className="fd-bottomBtn"
+                onClick={() => navigate(`/foods?table=${encodeURIComponent(table)}`)}
+                style={{ width: 220 }}
+              >
+                เลือกอาหาร
+              </button>
+            </div>
           </div>
         ) : (
           <>
-            <ul className="dr-cardList">
+            {/* รายการอาหารที่เลือก (แนวนอน กะทัดรัด) */}
+            <ul className="fd-list fd-list--compact">
               {selected.map((it, idx) => (
-                <li key={it.id} className="dr-card">
-                  <div className="dr-card__left">
-                    <img src={it.img} alt={it.name} className="dr-card__thumb" />
+                <li key={it.id} className="fd-card fd-card--h">
+                  <img
+                    className="fd-thumb fd-thumb--sm"
+                    src={asStr(it.img, PLACEHOLDER)}
+                    alt={it.name || "food"}
+                    loading="lazy"
+                    onError={(e) => {
+                      if (e.currentTarget.src !== PLACEHOLDER) e.currentTarget.src = PLACEHOLDER;
+                    }}
+                  />
+
+                  <div className="fd-h-body">
+                    <div className="fd-h-title" title={it.name}>
+                      ({idx + 1}) {it.name || "-"}
+                    </div>
+
+                    <div className="fd-h-meta">
+                      <span className="fd-bottomCount">× {toNum(it.qty)}</span>
+                      <span className="fd-price">{THB(toNum(it.qty) * toNum(it.price))} ฿</span>
+                    </div>
+
+                    {asStr(it.itemNote).trim() ? (
+                      <div className="fd-h-note">หมายเหตุ: {asStr(it.itemNote)}</div>
+                    ) : null}
                   </div>
 
-                  <div className="dr-card__body">
-                    <div className="dr-card__head">
-                      <div className="dr-card__title">({idx + 1}) {it.name}</div>
-                      <div className="dr-card__unitPrice">{THB(it.price)}</div>
-                    </div>
-
-                    <div className="dr-card__meta">
-                      <span className="dr-qtyPill">× {it.qty}</span>
-                      <span className="dr-lineTotal">{THB(lineTotal(it))}</span>
-                    </div>
-
-                    {/* บรรทัด 1: ธรรมดา / พิเศษ +10 (แสดงรายละเอียดเพิ่ม) */}
-                    <div className="dr-optionGroup">
-                      {SPECIAL_OPTS.map((s) => (
-                        <label key={s} className="dr-radio">
-                          <input
-                            type="radio"
-                            name={`sp_${it.id}`}
-                            checked={it.special === s}
-                            onChange={() => updateItem(it.id, { special: s })}
-                          />
-                          <span>
-                            {s}
-                            {s === "พิเศษ +10" && (
-                              <> (เพิ่ม {THB(SPECIAL_ADD)} × {it.qty})</>
-                            )}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-
-                    {/* บรรทัด 2: เอากลับบ้าน / ทานที่ร้าน */}
-                    <div className="dr-optionGroup">
-                      {EATWHERE_OPTS.map((e) => (
-                        <label key={e} className="dr-radio">
-                          <input
-                            type="radio"
-                            name={`ew_${it.id}`}
-                            checked={it.eatWhere === e}
-                            onChange={() => updateItem(it.id, { eatWhere: e })}
-                          />
-                          <span>{e}</span>
-                        </label>
-                      ))}
-                    </div>
-
-                    {/* ถ้าต้องการเปิดหมายเหตุรายเมนู ให้เอาคอมเมนต์ออกได้ */}
-                    {/* <textarea
-                      className="dr-itemNote"
-                      placeholder="หมายเหตุของเมนูนี้ เช่น ไข่ดาวสุกมาก"
-                      value={it.itemNote}
-                      onChange={(e) => updateItem(it.id, { itemNote: e.target.value })}
-                    /> */}
-                  </div>
-
-                  <div className="dr-card__right">
-                    <button
-                      className="dr-chipDanger"
-                      onClick={() => setAskRemoveId(it.id)}
-                      aria-label={`ลบ ${it.name}`}
-                    >
-                      ลบ
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="fd-circle fd-remove"
+                    title="ลบรายการนี้"
+                    aria-label={`ลบ ${it.name || ""}`}
+                    onClick={() => {
+                      if (window.confirm("ลบรายการนี้?")) removeOne(it.id);
+                    }}
+                  >
+                    ✕
+                  </button>
                 </li>
               ))}
             </ul>
 
-            {/* รายละเอียดรวม (เหมือนกล่อง "รายละเอียด" ในภาพตัวอย่าง) */}
-            <div className="dr-noteWrap">
-              <label className="dr-noteLabel">รายละเอียด</label>
-              <textarea
-                className="dr-noteArea"
-                placeholder="เช่น แยกน้ำจิ้ม, ไม่ใส่ช้อนส้อม, เสิร์ฟพร้อมกัน"
-                value={orderNote}
-                onChange={(e) => setOrderNote(e.target.value)}
-              />
-            </div>
+            {/* หมายเหตุใบสั่ง / วิธีชำระเงิน */}
+            <div className="fd-grid" style={{ marginTop: "14px", gridTemplateColumns: "1fr" }}>
+              <div className="fd-card" style={{ padding: "1rem" }}>
+                <label style={{ fontWeight: 700, color: "var(--ink)" }}>รายละเอียดเพิ่มเติม</label>
+                <textarea
+                  placeholder="เช่น ไม่ใส่ช้อนส้อม, เสิร์ฟพร้อมกัน"
+                  value={orderNote}
+                  onChange={(e) => setOrderNote(e.target.value)}
+                  style={{
+                    width: "100%",
+                    marginTop: ".55rem",
+                    minHeight: 90,
+                    borderRadius: 12,
+                    border: "1px solid var(--border)",
+                    padding: "10px 12px",
+                    resize: "vertical",
+                    fontFamily: "inherit",
+                  }}
+                />
+              </div>
 
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-              <button className="dr-chipDangerOutline" onClick={() => setAskClear(true)}>
-                ลบทั้งหมด
-              </button>
+              <div className="fd-card" style={{ padding: "1rem" }}>
+                <label style={{ fontWeight: 700, color: "var(--ink)" }}>💳 วิธีชำระเงิน</label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  style={{
+                    width: "100%",
+                    marginTop: ".55rem",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    background: "var(--surface-2)",
+                  }}
+                >
+                  <option value="เงินสด">💵 เงินสด</option>
+                  <option value="พร้อมเพย์">🏧 พร้อมเพย์</option>
+                </select>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                  <button
+                    type="button"
+                    className="fd-circle"
+                    title="ลบทั้งหมด"
+                    aria-label="ลบทั้งหมด"
+                    onClick={() => {
+                      if (window.confirm("ลบรายการทั้งหมด?")) clearAll();
+                    }}
+                  >
+                    🗑️
+                  </button>
+                </div>
+              </div>
             </div>
           </>
         )}
       </main>
 
-      {/* Summary fixed bottom */}
+      {/* Summary (bottom) */}
       {selected.length > 0 && (
-        <div className="dr-summaryBar" role="region" aria-label="สรุปคำสั่งซื้อ">
-          <div className="dr-summaryInfo">
-            <div className="dr-summaryText">
-              <span>รวม {selected.length} รายการ</span>
-              <strong className="dr-grand">{THB(total)}</strong>
-            </div>
-            <div className="dr-summarySub">โต๊ะ: <strong>{table}</strong></div>
+        <div className={`fd-bottom show`} role="region" aria-live="polite">
+          <div className="fd-bottomInfo">
+            <span className="fd-bottomCount">{selected.length} รายการ</span>
+            <span className="fd-bottomTotal">{THB(total)} ฿</span>
           </div>
-
           <button
-            className="dr-confirmBtn"
+            className="fd-bottomBtn"
             onClick={handleConfirm}
             disabled={isSubmitting}
-            aria-busy={isSubmitting}
+            style={{ opacity: isSubmitting ? 0.75 : 1 }}
           >
-            {isSubmitting ? "กำลังส่ง..." : "ยืนยันการสั่งซื้อ"}
+            {isSubmitting ? "⏳ กำลังส่ง..." : `✅ ยืนยันออเดอร์`}
           </button>
-        </div>
-      )}
-
-      {/* ----- Modal: ลบทั้งหมด ----- */}
-      {askClear && (
-        <div className="dr-modal" role="dialog" aria-modal="true">
-          <div className="dr-dialog">
-            <h3 className="dr-dialogTitle">ลบรายการ</h3>
-            <div className="dr-actions">
-              <button className="dr-dialogBtnDanger" onClick={clearAll}>ลบ</button>
-              <button className="dr-dialogBtn" onClick={() => setAskClear(false)}>ยกเลิก</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ----- Modal: ลบ 1 รายการ ----- */}
-      {askRemoveId !== null && (
-        <div className="dr-modal" role="dialog" aria-modal="true">
-          <div className="dr-dialog">
-            <h3 className="dr-dialogTitle">ลบรายการนี้?</h3>
-            <div className="dr-actions">
-              <button className="dr-dialogBtnDanger" onClick={() => removeOne(askRemoveId)}>ลบ</button>
-              <button className="dr-dialogBtn" onClick={() => setAskRemoveId(null)}>ยกเลิก</button>
-            </div>
-          </div>
         </div>
       )}
     </div>

@@ -1,11 +1,21 @@
+// backend/routes/orderRoutes.js
 const express = require("express");
 const router = express.Router();
-const controller = require("../controllers/orderController");
+const {
+  getAllOrders,
+  getOrdersByTable,
+  createOrder,
+  updateOrderStatus,
+  payOrder,
+  deleteOrder,
+} = require("../controllers/orderController");
 
-router.get("/", controller.getOrders);
-router.get("/:table_id", controller.getOrdersByTable);
-router.post("/", controller.createOrder);
-router.put("/:id", controller.updateOrder);
-router.delete("/:id", controller.deleteOrder);
+// อย่ามีวงเล็บเวลาส่ง handler
+router.get("/", getAllOrders);
+router.get("/table/:table_id", getOrdersByTable);       // แยก path ชัดเจน
+router.post("/", createOrder);
+router.put("/:order_id/status", updateOrderStatus);
+router.put("/:order_id/pay", payOrder);                  // ไม่ต้องมี :table_id
+router.delete("/:id", deleteOrder);
 
 module.exports = router;

@@ -1,21 +1,48 @@
 // src/pages/Drinks.jsx
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import "./drinks.css";
 
-// key สำหรับ sessionStorage แยกตามโต๊ะ
+/* ========== Config & Utils ========== */
+const TEMP_KEYS = ["ร้อน", "เย็น", "ปั่น"];
+const API = import.meta.env?.VITE_API_BASE || "http://localhost:5000";
 const cartKey = (table) => `dr_cart_${table || "unknown"}`;
+const selectedKey = (table) => `${cartKey(table)}_selected`;
+
+function norm(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function buildBasePrices(d) {
+  const hot    = norm(d.price_hot    ?? d.hot_price    ?? d.hot);
+  const iced   = norm(d.price_iced   ?? d.ice_price    ?? d.cold_price ?? d.ice);
+  const frappe = norm(d.price_frappe ?? d.price_blend  ?? d.blend_price ?? d.spin);
+  return { "ร้อน": hot, "เย็น": iced, "ปั่น": frappe };
+}
+function pickDefaultTemp(base_prices = {}) {
+  const has = (k) => base_prices[k] !== null && base_prices[k] !== undefined;
+  if (has("เย็น")) return "เย็น";
+  if (has("ร้อน")) return "ร้อน";
+  if (has("ปั่น")) return "ปั่น";
+  return null;
+}
 
 export default function Drinks() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
-  const tableLabel = sp.get("table") || ""; // ดึงหมายเลขโต๊ะจาก query param
 
-  const [loading, setLoading] = useState(true);   // state โหลดข้อมูล
-  const [error, setError] = useState(null);       // state error
-  const [items, setItems] = useState([]);         // รายการเมนู
+  // ใช้ table จาก query (ไม่บังคับต้องมี)
+  const tableLabel = sp.get("table")?.trim() || "";
 
-  // โหลดจาก backend + merge กับ sessionStorage
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [items, setItems]     = useState([]);
+
+  // เก็บค่าโต๊ะก่อนหน้าไว้ตรวจการสแกนใหม่
+  const prevTableRef = useRef(tableLabel);
+
+  /* ----- Load from API + merge sessionStorage ----- */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -23,163 +50,275 @@ export default function Drinks() {
         setError(null);
         setLoading(true);
 
-        const res = await fetch("http://localhost:5000/drinks"); // เรียก API
+        const res = await fetch(`${API}/drinks`, { headers: { Accept: "application/json" } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        console.log("👉 API drinks:", data); // debug response
+        const payload = Array.isArray(data) ? data : data.items || [];
 
-        // รองรับทั้ง array ตรง ๆ หรือ {items:[...]}
-        const payload = Array.isArray(data) ? data : (data.items || []);
+        const base = payload.map((d) => {
+          const base_prices = buildBasePrices(d);
+          const tempDefault = d.default_temperature || pickDefaultTemp(base_prices);
+          const imgSrc = d.image ? `data:image/png;base64,${d.image}` : "/images/drinks/placeholder.jpg";
 
-        // map ข้อมูลจาก backend → โครงสร้างที่ใช้ใน UI
-        const base = payload.map((d) => ({
-          id: d.id ?? d.item_id,   // ใช้ id หรือ item_id
-          name: d.name,
-          price: Number(d.default_price ?? 0) + Number(d.extra_price ?? 0),
-          img: d.img || "/images/drinks/placeholder.jpg",
-          base_prices: d.base_prices || {},
-          extra_price: Number(d.extra_price ?? 0),
-          default_temp: (() => {  // เลือก temp เริ่มต้น
-            const bp = d.base_prices || {};
-            if (bp["เย็น"] != null) return "เย็น";
-            if (bp["ร้อน"] != null) return "ร้อน";
-            if (bp["ปั่น"] != null) return "ปั่น";
-            return null;
-          })(),
-          toppings: d.toppings || [],
-          default_sweetness: d.sweetness || "ปกติ",
-          qty: 0, // เริ่มต้นยังไม่เลือก
-        }));
+          // id เป็น string เสมอ + fallback
+          const idRaw = d.id ?? d.drink_id ?? d.item_id ?? d.m_id ?? d.menu_id;
+          const id = (idRaw !== null && idRaw !== undefined && idRaw !== "")
+            ? String(idRaw)
+            : `name:${d.name}`;
 
-        // merge qty จาก sessionStorage
-        const saved = sessionStorage.getItem(cartKey(tableLabel));
-        if (saved) {
-          const savedArr = JSON.parse(saved);
-          const byId = Object.fromEntries(savedArr.map((x) => [x.id, x]));
+          return {
+            id,
+            name: d.name,
+            base_prices,
+            extra_price: norm(d.extra_price) ?? 0,
+            temp: tempDefault,
+            img: imgSrc,
+            qty: 0,
+          };
+        });
+
+        // merge cart per table
+        const savedRaw = sessionStorage.getItem(cartKey(tableLabel));
+        if (savedRaw) {
+          let parsed = [];
+          try { parsed = JSON.parse(savedRaw) || []; } catch {}
+          const byId = Object.fromEntries((Array.isArray(parsed) ? parsed : []).map((x) => [String(x.id), x]));
           for (const it of base) {
-            it.qty = Math.max(0, byId[it.id]?.qty ?? 0);
+            const keep = byId[it.id];
+            if (!keep) continue;
+            it.qty = Math.max(0, keep.qty ?? 0);
+            if (keep.temp && it.base_prices?.[keep.temp] != null) it.temp = keep.temp;
           }
         }
 
         if (alive) setItems(base);
       } catch (e) {
-        console.error(e);
         if (alive) setError(e.message || "โหลดข้อมูลล้มเหลว");
       } finally {
         if (alive) setLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [tableLabel]);
 
-  // บันทึกกลับลง sessionStorage ทุกครั้งที่ items เปลี่ยน
+  /* ----- ย้ายตะกร้า unknown → โต๊ะ เมื่อเพิ่งสแกนสำเร็จ ----- */
+  useEffect(() => {
+    const prev = prevTableRef.current;
+    if (!prev && tableLabel) {
+      try {
+        const fromKey = cartKey(""); // dr_cart_unknown
+        const fromSel = `${fromKey}_selected`;
+        const raw = sessionStorage.getItem(fromKey);
+        if (raw) {
+          const toKey = cartKey(tableLabel);
+          const existRaw = sessionStorage.getItem(toKey);
+
+          if (!existRaw) {
+            sessionStorage.setItem(toKey, raw);
+          } else {
+            const a = JSON.parse(raw || "[]");
+            const b = JSON.parse(existRaw || "[]");
+            const byId = new Map(b.map((x) => [String(x.id), { ...x }]));
+            for (const x of a) {
+              const k = String(x.id);
+              if (byId.has(k)) {
+                byId.set(k, { ...byId.get(k), qty: Math.max(0, (byId.get(k).qty || 0) + (x.qty || 0)) });
+              } else {
+                byId.set(k, { ...x });
+              }
+            }
+            sessionStorage.setItem(toKey, JSON.stringify(Array.from(byId.values())));
+          }
+          sessionStorage.removeItem(fromKey);
+          sessionStorage.removeItem(fromSel);
+        }
+      } catch {}
+    }
+    prevTableRef.current = tableLabel;
+  }, [tableLabel]);
+
+  /* ----- Persist cart ----- */
   useEffect(() => {
     try {
       sessionStorage.setItem(cartKey(tableLabel), JSON.stringify(items));
     } catch {}
   }, [items, tableLabel]);
 
-  // ฟังก์ชันลดจำนวน
+  /* ----- Price calc ----- */
+  const unitPrice = (it) => {
+    const base = it.base_prices?.[it.temp] != null ? Number(it.base_prices[it.temp]) : 0;
+    return base + Number(it.extra_price ?? 0);
+  };
+
+  /* ----- Actions ----- */
   const dec = (id) =>
-    setItems((list) =>
-      list.map((it) =>
-        it.id === id ? { ...it, qty: Math.max(0, it.qty - 1) } : it
-      )
-    );
-
-  // ฟังก์ชันเพิ่มจำนวน
+    setItems((list) => list.map((it) => (it.id === id ? { ...it, qty: Math.max(0, it.qty - 1) } : it)));
   const inc = (id) =>
+    setItems((list) => list.map((it) => (it.id === id ? { ...it, qty: it.qty + 1 } : it)));
+  const setTemp = (id, temp) =>
     setItems((list) =>
-      list.map((it) => (it.id === id ? { ...it, qty: it.qty + 1 } : it))
+      list.map((it) => (it.id !== id ? it : (it.base_prices?.[temp] != null ? { ...it, temp } : it)))
     );
 
-  // รวมจำนวนทั้งหมดในตะกร้า
-  const cartCount = useMemo(
-    () => items.reduce((sum, it) => sum + it.qty, 0),
+  /* ----- Summary + navigate ----- */
+  const cartCount = useMemo(() => items.reduce((s, it) => s + (it.qty || 0), 0), [items]);
+  const cartTotal = useMemo(
+    () => items.reduce((sum, it) => sum + unitPrice(it) * (it.qty || 0), 0),
     [items]
   );
 
-  // ไปหน้า confirm โดยพกหมายเลขโต๊ะ
   const goCart = () => {
-    navigate(`/drinks/confirm?table=${encodeURIComponent(tableLabel)}`);
+    const selected = items.filter((it) => (it.qty || 0) > 0);
+    if (!selected.length) {
+      alert("ยังไม่ได้เลือกเครื่องดื่ม");
+      return;
+    }
+    try {
+      sessionStorage.setItem(
+        selectedKey(tableLabel),
+        JSON.stringify(selected.map((x) => ({ ...x, drink_id: String(x.id), price: unitPrice(x) })))
+      );
+      sessionStorage.setItem(cartKey(tableLabel), JSON.stringify(items));
+    } catch {}
+
+    const qs = tableLabel ? `?table=${encodeURIComponent(tableLabel)}` : "";
+    navigate(`/drinks/confirm${qs}`, {
+      state: {
+        items: selected.map((x) => ({
+          ...x,
+          drink_id: String(x.id),
+          price: unitPrice(x),
+        })),
+      },
+    });
   };
 
-  if (loading) {
-    return (
-      <div className="dr-page">
-        <header className="dr-topbar">
-          <button className="dr-back" onClick={() => navigate(-1)} aria-label="ย้อนกลับ">‹</button>
-          <div className="dr-title">หมายเลขโต๊ะ: <strong>{tableLabel}</strong></div>
-          <button className="dr-cart" disabled>
-            <span className="dr-cartIcon">🧺</span>
-            <span className="dr-badge">0</span>
-          </button>
-        </header>
-        <main className="dr-container">
-          <p>กำลังโหลดรายการเครื่องดื่ม…</p>
-        </main>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="dr-page">
-        <header className="dr-topbar">
-          <button className="dr-back" onClick={() => navigate(-1)} aria-label="ย้อนกลับ">‹</button>
-          <div className="dr-title">หมายเลขโต๊ะ: <strong>{tableLabel}</strong></div>
-        </header>
-        <main className="dr-container">
-          <p style={{ color: "crimson" }}>❌ โหลดข้อมูลล้มเหลว: {error}</p>
-        </main>
-      </div>
-    );
-  }
-
+  /* ----- UI (mapped to Foods.css classes) ----- */
   return (
-    <div className="dr-page">
-      <header className="dr-topbar">
-        <button
-          className="dr-back"
-          onClick={() => navigate("/")}
-          aria-label="ย้อนกลับ"
-        >
-          ‹
-        </button>
-        <div className="dr-title">
-          หมายเลขโต๊ะ: <strong>{tableLabel}</strong>
+    <div className="fd-page">
+      {/* Topbar */}
+      <header className="fd-topbar" role="banner">
+        <button type="button" className="fd-back" onClick={() => navigate("/")} aria-label="ย้อนกลับ">‹</button>
+        <div className="fd-title">
+          <span>หมายเลขโต๊ะ</span>
+          <strong>{tableLabel || "—"}</strong>
         </div>
-        <button className="dr-cart" onClick={goCart} aria-label="ไปตะกร้า">
-          <span className="dr-cartIcon">🧺</span>
-          <span className="dr-badge">{cartCount}</span>
+        <button type="button" className="fd-cartBtn" onClick={goCart} aria-label="ไปตะกร้า">
+          <span className="fd-cartIcon" aria-hidden>🧺</span>
+          <span className="fd-badge" aria-live="polite">{cartCount}</span>
         </button>
       </header>
 
-      <main className="dr-container">
-        <h2 className="dr-sectionTitle">- เครื่องดื่ม -</h2>
+      {/* Content */}
+      <main className="fd-container" role="main">
+        <h2 className="fd-sectionTitle">เมนูเครื่องดื่ม</h2>
 
-        <ul className="dr-list">
-          {items.map((it) => (
-            <li key={it.id} className="dr-row">
-              <div className="dr-left">
-                <img className="dr-thumb" src={it.img} alt={it.name} />
-              </div>
-              <div className="dr-mid">
-                <h3 className="dr-name">{it.name}</h3>
-                <div className="dr-price">{it.price.toFixed(2)} ฿</div>
-              </div>
-              <div className="dr-right">
-                <button className="dr-circle" onClick={() => dec(it.id)} aria-label={`ลด ${it.name}`}>–</button>
-                <span className="dr-qty" aria-live="polite">{it.qty}</span>
-                <button className="dr-circle" onClick={() => inc(it.id)} aria-label={`เพิ่ม ${it.name}`}>+</button>
-              </div>
-              <hr className="dr-divider" />
-            </li>
-          ))}
-        </ul>
+        {error && <div className="fd-error" role="alert">❌ โหลดข้อมูลล้มเหลว: {error}</div>}
+
+        {loading ? (
+          <ul className="fd-grid">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <li key={`sk-${i}`} className="fd-card fd-skeleton">
+                <div className="fd-thumbWrap sk" />
+                <div className="fd-info">
+                  <div className="sk sk-line sk-1" />
+                  <div className="sk sk-line sk-2" />
+                </div>
+                <div className="fd-ctrl">
+                  <div className="sk sk-pill" />
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <ul className="fd-grid">
+            {items.map((it) => {
+              const price = unitPrice(it);
+              return (
+                <li key={`dr-${it.id}`} className="fd-card">
+                  <div className="fd-thumbWrap">
+                    <img
+                      className="fd-thumb"
+                      src={it.img}
+                      alt={it.name}
+                      loading="lazy"
+                      onError={(e) => {
+                        if (e.currentTarget.src !== "/images/drinks/placeholder.jpg") {
+                          e.currentTarget.src = "/images/drinks/placeholder.jpg";
+                        }
+                      }}
+                    />
+                  </div>
+
+                  <div className="fd-info">
+                    <h3 className="fd-name" title={it.name}>{it.name}</h3>
+                    <div className="fd-price">{price.toFixed(2)} ฿</div>
+
+                    {/* อุณหภูมิ — ใช้สไตล์เบา ๆ เพื่อเข้ากับธีม (ไม่มีใน Foods.css) */}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: ".5rem",
+                        marginTop: ".55rem",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      {TEMP_KEYS.map((t) => {
+                        const hasPrice = it.base_prices?.[t] != null; // 0 ได้
+                        const active = it.temp === t;
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => hasPrice && setTemp(it.id, t)}
+                            disabled={!hasPrice}
+                            aria-pressed={active}
+                            aria-label={`${it.name} – ${t}`}
+                            title={
+                              hasPrice
+                                ? `${t} (${Number(it.base_prices[t]).toFixed(0)} ฿)`
+                                : `ไม่มีราคา ${t}`
+                            }
+                            style={{
+                              padding: ".35rem .6rem",
+                              borderRadius: "999px",
+                              border: "1px solid var(--border)",
+                              background: active ? "var(--brand)" : "var(--chip)",
+                              color: active ? "#fff" : "var(--ink)",
+                              cursor: hasPrice ? "pointer" : "not-allowed",
+                              opacity: hasPrice ? 1 : 0.5,
+                              fontWeight: 700,
+                              boxShadow: "var(--shadow)",
+                              fontSize: ".85rem",
+                            }}
+                          >
+                            {t}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="fd-ctrl" aria-label={`ตัวควบคุมจำนวน ${it.name}`}>
+                    <button type="button" className="fd-circle" onClick={() => dec(it.id)} aria-label={`ลด ${it.name}`}>–</button>
+                    <span className="fd-qty" aria-live="polite">{it.qty}</span>
+                    <button type="button" className="fd-circle" onClick={() => inc(it.id)} aria-label={`เพิ่ม ${it.name}`}>+</button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </main>
+
+      {/* Bottom confirm bar */}
+      <div className={`fd-bottom ${cartCount ? "show" : ""}`} role="region" aria-live="polite">
+        <div className="fd-bottomInfo">
+          <span className="fd-bottomCount">{cartCount} รายการ</span>
+          <span className="fd-bottomTotal">{cartTotal.toFixed(2)} ฿</span>
+        </div>
+        <button className="fd-bottomBtn" onClick={goCart}>ยืนยันออเดอร์</button>
+      </div>
     </div>
   );
 }

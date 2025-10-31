@@ -1,60 +1,115 @@
-const Order = require("../models/orderModel");
+"use strict";
+const Orders = require("../models/orderModel");
 
-// ✅ GET: ดึงออเดอร์ทั้งหมด
-exports.getOrders = async (req, res) => {
+const toNum = (v, fb = 0) => (Number.isFinite(Number(v)) ? Number(v) : fb);
+const asStr = (v, fb = "") => (typeof v === "string" ? v : fb);
+
+async function getAllOrders(req, res) {
   try {
-    const results = await Order.getAll();
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const rows = await Orders.getAll();
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "DB_ERROR", message: e.message || String(e) });
   }
-};
+}
 
-// ✅ GET: ดึงออเดอร์จาก table_id
-exports.getOrdersByTable = async (req, res) => {
+async function getOrdersByTable(req, res) {
   try {
-    const { table_id } = req.params;
-    const results = await Order.getByTableId(table_id);
-    if (!results.length)
-      return res.status(404).json({ message: "No orders found for this table" });
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+    const table_number = Number(req.params.table_number);
+    if (!Number.isFinite(table_number))
+      return res.status(400).json({ error: "BAD_TABLE_NUMBER" });
 
-// ✅ POST: สร้างออเดอร์ใหม่
-exports.createOrder = async (req, res) => {
+    const rows = await Orders.getByTable(table_number);
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "DB_ERROR", message: e.message || String(e) });
+  }
+}
+
+async function createOrder(req, res) {
   try {
-    const { table_id } = req.body;
-    if (!table_id) return res.status(400).json({ error: "table_id ต้องไม่ว่าง" });
+    const body = req.body || {};
+    const table_number  = Number.isFinite(Number(body.table_number)) ? Number(body.table_number) : null;
+    const table_label   = asStr(body.table_label || "unknown");
+    const payment_method= asStr(body.payment_method || "unknown").toLowerCase();
+    const order_note    = asStr(body.order_note || "");
 
-    const orderId = await Order.create(table_id);
-    res.json({ message: "Order created successfully!", orderId });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const itemsSrc = Array.isArray(body.items) ? body.items : [];
+    const items = itemsSrc.map(it => ({
+      item_type: asStr(it.item_type || "").toLowerCase(),
+      ref_id: it.ref_id != null ? String(it.ref_id) : null,
+      name: asStr(it.name || "-"),
+      price: toNum(it.price),
+      qty: toNum(it.qty),
+      itemNote: asStr(it.itemNote || "")
+    })).filter(x => x.qty > 0 && x.ref_id);
+
+    if (!items.length) return res.status(400).json({ error: "NO_ITEMS", message: "ไม่มีรายการสินค้า" });
+
+    const result = await Orders.createFull({
+      table_number,
+      table_label,
+      items,
+      payment_method,
+      order_note
+    });
+
+    res.status(201).json({
+      message: "ORDER_CREATED",
+      order_id: result.order_id,
+      total_amount: result.total_amount,
+      status: result.status
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "DB_ERROR", message: e.message || String(e) });
   }
-};
+}
 
-// ✅ PUT: อัปเดตสถานะออเดอร์
-exports.updateOrder = async (req, res) => {
+async function updateOrderStatus(req, res) {
   try {
-    const { id } = req.params;
-    const { status } = req.body;
-    await Order.updateStatus(id, status);
-    res.json({ message: "Order updated successfully!" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const order_id = Number(req.params.order_id);
+    const status = asStr(req.body.status || req.query.status || "");
+    if (!order_id || !status) return res.status(400).json({ error: "BAD_REQUEST" });
+    await Orders.updateStatus(order_id, status);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "DB_ERROR", message: e.message || String(e) });
   }
-};
+}
 
-// ✅ DELETE: ลบออเดอร์และ order_items
-exports.deleteOrder = async (req, res) => {
+async function payOrder(req, res) {
   try {
-    const { id } = req.params;
-    await Order.remove(id);
-    res.json({ message: "Order and related items deleted successfully!" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const order_id = Number(req.params.order_id);
+    if (!order_id) return res.status(400).json({ error: "BAD_ORDER_ID" });
+    await Orders.pay(order_id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "DB_ERROR", message: e.message || String(e) });
   }
+}
+
+async function deleteOrder(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: "BAD_ID" });
+    await Orders.remove(id);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "DB_ERROR", message: e.message || String(e) });
+  }
+}
+
+module.exports = {
+  getAllOrders,
+  getOrdersByTable,
+  createOrder,
+  updateOrderStatus,
+  payOrder,
+  deleteOrder,
 };

@@ -1,17 +1,31 @@
-const mysql = require('mysql2');
+// backend/DB/db.js
+const mysql = require("mysql2/promise"); // ใช้ promise ล้วน
 
-// สร้าง connection pool เพื่อประสิทธิภาพที่ดี
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',   // host ของฐานข้อมูล
-  user: process.env.DB_USER || 'root',        // user ของ MySQL
-  password: process.env.DB_PASSWORD || '123456',    // password ของ MySQL
-  database: process.env.DB_NAME || 'restaurant_db', // ชื่อ database
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASS || "123456",
+  database: process.env.DB_NAME || "restaurant_db",
+  port: Number(process.env.DB_PORT || 3306),
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  multipleStatements: false,
 });
 
-// ใช้ promise wrapper เพื่อให้รองรับ async/await
-const db = pool.promise();
+async function assertDb() {
+  const conn = await pool.getConnection();
+  await conn.ping();
+  conn.release();
+  console.log("✅ DB connected");
+}
 
-module.exports = db;
+async function query(sql, params) {
+  return pool.query(sql, params);
+}
+
+async function getConnection() {
+  // คืน promise แบบใช้ await ได้
+  return pool.getConnection();
+}
+
+module.exports = { pool, query, getConnection, assertDb };

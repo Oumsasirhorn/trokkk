@@ -1,59 +1,50 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import "./Booking.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
-
-// ปรับช่วงโซนชั่วคราว: A1–A18 = inside (แก้ได้ตามผังจริง)
+const ZONES = ["โซนในร้าน", "โซนนอกร้าน"];
 const INSIDE_MAX = 18;
-const ZONES = ["inside", "outside"];
 
-// เดาโซนจากชื่อโต๊ะถ้ายังไม่มี zone จาก backend
 function deriveZoneFromLabel(label = "") {
   const m = String(label).match(/(\d+)/);
   const n = m ? Number(m[1]) : NaN;
-  if (Number.isNaN(n)) return "inside";
-  return n <= INSIDE_MAX ? "inside" : "outside";
+  if (Number.isNaN(n)) return "โซนในร้าน";
+  return n <= INSIDE_MAX ? "โซนในร้าน" : "โซนนอกร้าน";
 }
 
 export default function Booking() {
   const navigate = useNavigate();
+  const [sp] = useSearchParams();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [tables, setTables] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [zone, setZone] = useState("โซนในร้าน");
 
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState("");
-  const [tables, setTables]     = useState([]);   // [{id, number, status, qr_code, zone}]
-  const [selected, setSelected] = useState(null); // table_number
-  const [zone, setZone]         = useState("inside");
+  const [highlight, setHighlight] = useState(sp.get("highlight") || "");
 
-  // โหลดรายการโต๊ะจาก backend (ตอนนี้ยังไม่แยกโซน server-side)
+  // โหลดโต๊ะจาก DB
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setLoading(true);
         setError("");
-        const res = await fetch(`${API_BASE}/tables-in`, { headers: { Accept: "application/json" } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const r = await fetch(`${API_BASE}/tables`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
 
-        const rows = Array.isArray(data) ? data : (data.items || data.tables || []);
-        const normalized = rows.map((r) => {
-          const number = r.table_number ?? r.tableNo ?? r.number ?? `T${r.table_id ?? r.id ?? ""}`;
-          // ถ้า backend ยังไม่มี r.zone → เดาจากหมายเลข, ถ้ามีแล้วจะใช้ค่าจาก backend ทันที
-          const zone = (r.zone || r.area || r.section) ?? deriveZoneFromLabel(number);
-          return {
-            id:      r.table_id ?? r.id ?? r.tableId,
-            number,
-            status:  r.status ?? "ว่าง",
-            qr_code: r.qr_code ?? null,
-            zone, // <-- สำคัญ
-          };
-        });
+        const normalized = (Array.isArray(data) ? data : []).map((t) => ({
+          id: t.table_id,
+          number: t.table_number || `T${t.table_id}`,
+          status: t.status || "ว่าง",
+          zone: t.zone && t.zone.trim() !== "" ? t.zone.trim() : deriveZoneFromLabel(t.table_number || ""),
+        }));
 
-        // เรียงตามเลขท้าย
         const ordered = normalized.sort((a, b) => {
-          const na = Number(String(a.number).match(/\d+/)?.[0] ?? 1e9);
-          const nb = Number(String(b.number).match(/\d+/)?.[0] ?? 1e9);
+          const na = Number(a.number.match(/\d+/)?.[0] ?? 1e9);
+          const nb = Number(b.number.match(/\d+/)?.[0] ?? 1e9);
           return na - nb;
         });
 
@@ -64,91 +55,117 @@ export default function Booking() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => { alive = false };
   }, []);
 
-  // กรองตามโซนที่เลือก
+  // auto-clear highlight
+  useEffect(() => {
+    if (!highlight) return;
+    const t = setTimeout(() => setHighlight(""), 2500);
+    return () => clearTimeout(t);
+  }, [highlight]);
+
+  // filter tables ตาม zone (trim ป้องกัน space)
   const visibleTables = useMemo(
-    () => tables.filter((t) => t.zone === zone),
+    () => tables.filter(t => t.zone?.trim() === zone.trim()),
     [tables, zone]
   );
 
-  // ถ้าเปลี่ยนโซนแล้วโต๊ะที่เลือกไม่อยู่ในโซนนั้น → เคลียร์
+  const countAll = visibleTables.length;
+  const countBusy = visibleTables.filter(t => t.status === "จองแล้ว" || t.status === "กำลังใช้งาน").length;
+  const countFree = countAll - countBusy;
+
+  // reset selected ถ้าเปลี่ยน zone
   useEffect(() => {
-    if (selected && !visibleTables.some((t) => t.number === selected)) {
-      setSelected(null);
-    }
+    if (selected && !visibleTables.some(t => t.number === selected)) setSelected(null);
   }, [zone, visibleTables, selected]);
 
-  const isReserved = (t) => (t.status || "").trim() !== "ว่าง";
-
-  const onPick = (t) => {
-    if (isReserved(t)) return;
-    setSelected((prev) => (prev === t.number ? null : t.number));
-  };
-
+  const isReserved = (t) => t.status === "จองแล้ว" || t.status === "กำลังใช้งาน";
+  const onPick = (t) => { if (isReserved(t)) return; setSelected(p => p === t.number ? null : t.number); };
   const onConfirm = (e) => {
     e.preventDefault();
     if (!selected) return alert("โปรดเลือกโต๊ะก่อน");
-    navigate("/confirm", { state: { tableNo: selected, zone }, replace: false });
+    navigate("/confirm", { state: { tableNo: selected, zone } });
   };
 
   return (
-    <div className="booking-full">
+    <div className="booking-page">
       <header className="bk-titlebar">
-        <button className="bk-back" onClick={() => navigate(-1)} aria-label="ย้อนกลับ">‹</button>
+        <button className="bk-back" onClick={() => navigate(-1)} aria-label="ย้อนกลับ">
+          <svg viewBox="0 0 24 24" width="20" height="20">
+            <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" />
+          </svg>
+        </button>
         <h1>จองโต๊ะ</h1>
       </header>
 
-      {/* ปุ่มสลับโซน */}
-      <div className="bk-zones">
-        {ZONES.map((z) => (
+      {/* zone selector */}
+      <section className="bk-zones">
+        {ZONES.map(z => (
           <button
             key={z}
             className={`bk-zone ${zone === z ? "active" : ""}`}
             onClick={() => setZone(z)}
             type="button"
           >
-            {z === "inside" ? "โซนในร้าน" : "โซนนอกร้าน"}
+            <span className="dot" aria-hidden="true" />{z}
           </button>
         ))}
-      </div>
+      </section>
 
-      <div className="bk-legend top">เวที</div>
+      {/* stats */}
+      <section className="bk-stats">
+        <div className="stat"><div className="stat__label">ทั้งหมด</div><div className="stat__value">{countAll}</div></div>
+        <div className="stat"><div className="stat__label">ว่าง</div><div className="stat__value">{countFree}</div></div>
+        <div className="stat"><div className="stat__label">จองแล้ว / กำลังใช้งาน</div><div className="stat__value">{countBusy}</div></div>
+      </section>
 
-      <div className="bk-map">
-        {loading && <div className="bk-loading">กำลังโหลดโต๊ะ…</div>} 
-        {error &&   <div className="bk-error">เกิดข้อผิดพลาด: {error}</div>}
+      <div className="bk-legend top"><span className="bar" aria-hidden="true" />เวที</div>
 
-        {!loading && !error && visibleTables.map((t) => {
-          const reserved = isReserved(t);
-          const isSel = selected === t.number;
-          return (
-            <button
-              key={t.id ?? t.number}
-              className={`seat ${reserved ? "seat--reserved" : ""} ${isSel ? "seat--selected" : ""}`}
-              onClick={() => onPick(t)}
-              type="button"
-              disabled={reserved}
-              aria-pressed={isSel}
-              aria-label={reserved ? `${t.number} จองแล้ว` : `โต๊ะ ${t.number}`}
-              title={reserved ? "จองแล้ว" : `เลือกโต๊ะ ${t.number}`}
-            >
-              {reserved ? "จองแล้ว" : t.number}
-            </button>
-          );
-        })}
-      </div>
+      {/* table map */}
+      <section className="bk-map">
+        {loading && <div className="bk-loading"><div className="shimmer" />กำลังโหลดโต๊ะ…</div>}
+        {error && <div className="bk-error">{error}</div>}
 
-      <div className="bk-legend bottom">ประตูร้าน</div>
+        {!loading && !error && (
+          <div className="seat-grid" role="list" aria-label={`ผังโต๊ะ (${zone})`}>
+            {visibleTables.map(t => {
+              const reserved = isReserved(t);
+              const isHL = highlight && t.number === highlight;
+              const isSel = selected === t.number;
+              return (
+                <button
+                  key={t.id}
+                  className={`seat
+                    ${reserved ? t.status === "กำลังใช้งาน" ? "seat--busy" : "seat--reserved" : ""}
+                    ${isSel ? "seat--selected" : ""}
+                    ${isHL ? "seat--hl" : ""}`}
+                  onClick={() => onPick(t)}
+                  type="button"
+                  disabled={reserved}
+                  aria-label={reserved ? `${t.number} ${t.status}` : `โต๊ะ ${t.number}`}
+                  title={reserved ? t.status : `เลือกโต๊ะ ${t.number}`}
+                  role="listitem"
+                >
+                  <span className="seat__num">{t.number}</span>
+                  <span className="seat__status">{t.status}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
+      <div className="bk-legend bottom"><span className="bar" aria-hidden="true" />ประตูร้าน</div>
+
+      {/* confirm */}
       <form onSubmit={onConfirm} className="bk-actions">
-        <div className="bk-summary">
-          โต๊ะที่เลือก: <strong>{selected ?? "-"}</strong> / โซน: <strong>{zone === "inside" ? "ในร้าน" : "นอกร้าน"}</strong>
+        <div className="bk-summary" aria-live="polite">
+          โต๊ะที่เลือก: <strong>{selected ?? "-"}</strong>
+          <span className="sep">•</span>
+          โซน: <strong>{zone}</strong>
         </div>
-        <button className="bk-submit" type="submit" disabled={!selected}>
-          ยืนยันการจอง
-        </button>
+        <button className="bk-submit" type="submit" disabled={!selected}>ยืนยันการจอง</button>
       </form>
     </div>
   );
